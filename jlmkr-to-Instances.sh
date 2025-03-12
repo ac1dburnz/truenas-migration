@@ -198,13 +198,109 @@ perform_safe_migration() {
     umount "$mount_point" && rmdir "$mount_point"
 }
 
+# Enhanced Mount/Unmount functionality
+mount_unmount_menu() {
+    while true; do
+        echo -e "\n${GREEN}Select operation:${NC}"
+        PS3="Choose action (1-2): "
+        select action in "Mount Application" "Unmount Application" "Return to Main Menu"; do
+            case $REPLY in
+                1|2|3) break ;;
+                *) echo -e "${RED}Invalid choice!${NC}" ;;
+            esac
+        done
+
+        case $action in
+            "Mount Application")
+                # Get unmounted datasets
+                mapfile -t datasets < <(zfs list -H -o name | grep "^$ZFS_DATASET_BASE/")
+                if [ ${#datasets[@]} -eq 0 ]; then
+                    echo -e "${YELLOW}No applications found under $ZFS_DATASET_BASE!${NC}"
+                    continue
+                fi
+
+                # Filter out mounted datasets
+                mount_candidates=()
+                for dataset in "${datasets[@]}"; do
+                    app_name=$(basename "$dataset")
+                    mount_point="$MOUNTED_BASE/$app_name"
+                    if [ ! -d "$mount_point" ] || ! mountpoint -q "$mount_point"; then
+                        mount_candidates+=("$app_name")
+                    fi
+                done
+
+                if [ ${#mount_candidates[@]} -eq 0 ]; then
+                    echo -e "${YELLOW}All applications are already mounted!${NC}"
+                    continue
+                fi
+
+                # Dataset selection
+                PS3="Select application to mount: "
+                select app_name in "${mount_candidates[@]}"; do
+                    [[ -n "$app_name" ]] && break
+                    echo -e "${RED}Invalid selection!${NC}"
+                done
+
+                # Mount operation
+                dataset="$ZFS_DATASET_BASE/$app_name"
+                mount_point="$MOUNTED_BASE/$app_name"
+                mkdir -p "$mount_point"
+                if mount -t zfs "$dataset" "$mount_point"; then
+                    echo -e "${GREEN}Successfully mounted $app_name${NC}"
+                else
+                    echo -e "${RED}Failed to mount $app_name!${NC}"
+                    rmdir "$mount_point" 2>/dev/null
+                fi
+                ;;
+
+            "Unmount Application")
+                # Get mounted applications
+                unmount_candidates=()
+                for dir in "$MOUNTED_BASE"/*/; do
+                    [[ -d "$dir" ]] || continue
+                    dir=${dir%/}  # Remove trailing slash
+                    if mountpoint -q "$dir"; then
+                        unmount_candidates+=("$(basename "$dir")")
+                    fi
+                done
+
+                if [ ${#unmount_candidates[@]} -eq 0 ]; then
+                    echo -e "${YELLOW}No mounted applications found!${NC}"
+                    continue
+                fi
+
+                # Application selection
+                PS3="Select application to unmount: "
+                select app_name in "${unmount_candidates[@]}"; do
+                    [[ -n "$app_name" ]] && break
+                    echo -e "${RED}Invalid selection!${NC}"
+                done
+
+                # Unmount operation
+                mount_point="$MOUNTED_BASE/$app_name"
+                if umount "$mount_point"; then
+                    rmdir "$mount_point"
+                    echo -e "${GREEN}Successfully unmounted $app_name${NC}"
+                else
+                    echo -e "${RED}Failed to unmount $app_name!${NC}"
+                fi
+                ;;
+
+            "Return to Main Menu")
+                return 0
+                ;;
+        esac
+    done
+}
+
 # Main menu interface
 main_menu() {
     while true; do
         echo -e "\n${GREEN}TrueNAS Jail Migration Manager${NC}"
         echo "1) Migrate Jail"
         echo "2) Configure Paths"
-        echo "3) Exit"
+        echo "3) Manage Application Mounts"
+        echo "4) Exit"
         read -p "Enter choice: " choice
 
         case $choice in
@@ -237,6 +333,9 @@ main_menu() {
                 echo -e "${GREEN}Configuration updated!${NC}"
                 ;;
             3)
+                mount_unmount_menu
+                ;;
+            4)
                 exit 0
                 ;;
             *)
